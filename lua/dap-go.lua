@@ -48,23 +48,50 @@ local function setup_delve_adapter(dap, config)
   local args = { "dap", "-l", "127.0.0.1:" .. config.delve.port }
   vim.list_extend(args, config.delve.args)
 
-  dap.adapters.go = {
+  local delve_config = {
     type = "server",
     port = config.delve.port,
     executable = {
       command = config.delve.path,
       args = args,
       detached = config.delve.detached,
-      cwd = config.delve.cwd,
     },
     options = {
       initialize_timeout_sec = config.delve.initialize_timeout_sec,
     },
   }
+
+  dap.adapters.go = function(callback, client_config)
+    if client_config.mode ~= "remote" then
+      callback({
+        type = "server",
+        port = config.delve.port,
+        executable = {
+          command = config.delve.path,
+          args = args,
+          detached = config.delve.detached,
+        },
+        options = {
+          initialize_timeout_sec = config.delve.initialize_timeout_sec,
+        },
+      })
+      return
+    end
+
+    -- See https://github.com/mfussenegger/nvim-dap/blob/master/doc/dap.txt#L76-L78
+    callback({
+      type = "server",
+      host = client_config.host,
+      port = client_config.port,
+      options = {
+        initialize_timeout_sec = config.delve.initialize_timeout_sec,
+      },
+    })
+  end
 end
 
 local function setup_go_configuration(dap, configs)
-  dap.configurations.go = {
+  local common_debug_configs = {
     {
       type = "go",
       name = "Debug",
@@ -112,6 +139,14 @@ local function setup_go_configuration(dap, configs)
       buildFlags = configs.delve.build_flags,
     },
   }
+
+  if dap.configurations.go == nil then
+    dap.configurations.go = {}
+  end
+
+  for _, config in ipairs(common_debug_configs) do
+    table.insert(dap.configurations.go, config)
+  end
 
   if configs == nil or configs.dap_configurations == nil then
     return
