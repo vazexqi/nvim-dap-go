@@ -4,6 +4,7 @@ local M = {
   last_testname = "",
   last_testpath = "",
   test_buildflags = "",
+  test_verbose = false,
 }
 
 local default_config = {
@@ -13,9 +14,16 @@ local default_config = {
     port = "${port}",
     args = {},
     build_flags = "",
-    detached = true,
+    -- Automativally handle the issue on Windows where delve needs
+    -- to be run in attched mode or it will fail (actually crashes).
+    detached = vim.fn.has("win32") == 0,
+  },
+  tests = {
+    verbose = false,
   },
 }
+
+local internal_global_config = {}
 
 local function load_module(module_name)
   local ok, module = pcall(require, module_name)
@@ -29,6 +37,16 @@ local function get_arguments()
     vim.ui.input({ prompt = "Args: " }, function(input)
       args = vim.split(input or "", " ")
       coroutine.resume(dap_run_co, args)
+    end)
+  end)
+end
+
+local function get_build_flags(config)
+  return coroutine.create(function(dap_run_co)
+    local build_flags = config.build_flags
+    vim.ui.input({ prompt = "Build Flags: " }, function(input)
+      build_flags = vim.split(input or "", " ")
+      coroutine.resume(dap_run_co, build_flags)
     end)
   end)
 end
@@ -109,6 +127,14 @@ local function setup_go_configuration(dap, configs)
     },
     {
       type = "go",
+      name = "Debug (Arguments & Build Flags)",
+      request = "launch",
+      program = "${file}",
+      args = get_arguments,
+      buildFlags = get_build_flags,
+    },
+    {
+      type = "go",
       name = "Debug Package",
       request = "launch",
       program = "${fileDirname}",
@@ -160,16 +186,19 @@ local function setup_go_configuration(dap, configs)
 end
 
 function M.setup(opts)
-  local config = vim.tbl_deep_extend("force", default_config, opts or {})
-  M.test_buildflags = config.delve.build_flags
+  internal_global_config = vim.tbl_deep_extend("force", default_config, opts or {})
+  M.test_buildflags = internal_global_config.delve.build_flags
+  M.test_verbose = internal_global_config.tests.verbose
+
   local dap = load_module("dap")
-  setup_delve_adapter(dap, config)
-  setup_go_configuration(dap, config)
+  setup_delve_adapter(dap, internal_global_config)
+  setup_go_configuration(dap, internal_global_config)
 end
 
-local function debug_test(testname, testpath, build_flags)
+local function debug_test(testname, testpath, build_flags, extra_args)
   local dap = load_module("dap")
-  dap.run({
+
+  local config = {
     type = "go",
     name = testname,
     request = "launch",
@@ -177,7 +206,13 @@ local function debug_test(testname, testpath, build_flags)
     program = testpath,
     args = { "-test.run", "^" .. testname .. "$" },
     buildFlags = build_flags,
-  })
+  }
+
+  if not vim.tbl_isempty(extra_args) then
+    table.move(extra_args, 1, #extra_args, #config.args + 1, config.args)
+  end
+
+  dap.run(config)
 end
 
 function M.debug_test()
@@ -193,7 +228,13 @@ function M.debug_test()
 
   local msg = string.format("starting debug session '%s : %s'...", test.package, test.name)
   vim.notify(msg)
-  debug_test(test.name, test.package, M.test_buildflags)
+
+  local extra_args = {}
+  if M.test_verbose then
+    extra_args = { "-test.v" }
+  end
+
+  debug_test(test.name, test.package, M.test_buildflags, extra_args)
 
   return true
 end
@@ -209,9 +250,23 @@ function M.debug_last_test()
 
   local msg = string.format("starting debug session '%s : %s'...", testpath, testname)
   vim.notify(msg)
-  debug_test(testname, testpath, M.test_buildflags)
+
+  local extra_args = {}
+  if M.test_verbose then
+    extra_args = { "-test.v" }
+  end
+
+  debug_test(testname, testpath, M.test_buildflags, extra_args)
 
   return true
+end
+
+function M.get_build_flags()
+  return get_build_flags(internal_global_config)
+end
+
+function M.get_arguments()
+  return get_arguments()
 end
 
 return M
